@@ -3,7 +3,8 @@ import os
 import subprocess
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QComboBox, QTextEdit, QFileDialog, QLabel, QListWidget, QSpinBox
+    QPushButton, QComboBox, QTextEdit, QFileDialog, QLabel, QListWidget,
+    QSpinBox, QProgressBar
 )
 from PyQt6.QtCore import pyqtSignal, QRunnable, QObject, QThreadPool
 
@@ -58,11 +59,14 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
+
         self.select_files_button = QPushButton("Select Files")
         self.select_files_button.clicked.connect(self.select_files)
         layout.addWidget(self.select_files_button)
+
         self.files_list = QListWidget()
         layout.addWidget(self.files_list)
+
         format_layout = QHBoxLayout()
         format_label = QLabel("Select Format:")
         self.format_combo = QComboBox()
@@ -71,6 +75,7 @@ class MainWindow(QMainWindow):
         format_layout.addWidget(format_label)
         format_layout.addWidget(self.format_combo)
         layout.addLayout(format_layout)
+
         bitrate_layout = QHBoxLayout()
         bitrate_label = QLabel("Select Bitrate:")
         self.bitrate_combo = QComboBox()
@@ -78,6 +83,7 @@ class MainWindow(QMainWindow):
         bitrate_layout.addWidget(self.bitrate_combo)
         layout.addLayout(bitrate_layout)
         self.update_bitrate_options(self.format_combo.currentText())
+
         cores_layout = QHBoxLayout()
         cores_label = QLabel("Number of Cores:")
         self.cores_spinbox = QSpinBox()
@@ -88,9 +94,15 @@ class MainWindow(QMainWindow):
         cores_layout.addWidget(cores_label)
         cores_layout.addWidget(self.cores_spinbox)
         layout.addLayout(cores_layout)
+
         self.convert_button = QPushButton("Convert")
         self.convert_button.clicked.connect(self.start_conversion)
         layout.addWidget(self.convert_button)
+
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMinimum(0)
+        layout.addWidget(self.progress_bar)
+
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         layout.addWidget(self.log_output)
@@ -122,7 +134,10 @@ class MainWindow(QMainWindow):
         self.threadpool.setMaxThreadCount(cores)
         self.convert_button.setEnabled(False)
         self.select_files_button.setEnabled(False)
-        self.remaining_tasks = len(self.selected_files)
+        self.completed_tasks = 0
+        total_files = len(self.selected_files)
+        self.progress_bar.setMaximum(total_files)
+        self.progress_bar.setValue(0)
         for file_path in self.selected_files:
             worker = Worker(file_path, target_format, bitrate)
             worker.signals.log_signal.connect(self.update_log)
@@ -130,8 +145,9 @@ class MainWindow(QMainWindow):
             self.threadpool.start(worker)
 
     def worker_finished(self):
-        self.remaining_tasks -= 1
-        if self.remaining_tasks == 0:
+        self.completed_tasks += 1
+        self.progress_bar.setValue(self.completed_tasks)
+        if self.completed_tasks == len(self.selected_files):
             self.conversion_finished()
 
     def update_log(self, message):
@@ -145,6 +161,6 @@ class MainWindow(QMainWindow):
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.resize(600, 400)
+    window.resize(600, 500)
     window.show()
     sys.exit(app.exec())
