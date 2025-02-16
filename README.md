@@ -53,42 +53,6 @@ python main.py
 
 Converted files will be saved in the **same directory** with a `"c_"` prefix.
 
----
-
-## 📂 File Structure
-```
-/audioconv
-│── main.py          # Main application script
-│── README.md        # This file
-└── requirements.txt # Dependencies (optional)
-```
-
----
-
-## 🔧 Development
-
-### Clone the repository:
-```bash
-git clone https://github.com/your-username/audioconv.git
-cd audioconv
-```
-
-### Create a virtual environment (optional but recommended):
-```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
-```
-
-### Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-
-### Run the program:
-```bash
-python main.py
-```
 
 ## ⚖️ License
 This project is open-source under the **MIT License**.
