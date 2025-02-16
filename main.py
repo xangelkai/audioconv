@@ -120,7 +120,7 @@ class MainWindow(QMainWindow):
         self.update_bitrate_options(self.format_combo.currentText())
 
         cores_layout = QHBoxLayout()
-        cores_label = QLabel("Number of Cores:")
+        cores_label = QLabel("Number of Threads:")
         self.cores_spinbox = QSpinBox()
         self.cores_spinbox.setMinimum(1)
         cpu_count = os.cpu_count() if os.cpu_count() is not None else 4
