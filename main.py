@@ -1,6 +1,8 @@
 import sys
 import os
 import subprocess
+import threading
+import time
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QComboBox, QTextEdit, QFileDialog, QLabel, QListWidget,
@@ -13,31 +15,54 @@ class WorkerSignals(QObject):
     finished_signal = pyqtSignal()
 
 class Worker(QRunnable):
-    def __init__(self, file_path, target_format, bitrate):
+    def __init__(self, file_path, target_format, bitrate, cancel_event):
         super().__init__()
         self.file_path = file_path
         self.target_format = target_format
         self.bitrate = bitrate
+        self.cancel_event = cancel_event
         self.signals = WorkerSignals()
+        self.process = None
 
     def run(self):
+        # Check for cancellation before starting
+        if self.cancel_event.is_set():
+            self.signals.log_signal.emit("Conversion canceled before start: " + self.file_path)
+            self.signals.finished_signal.emit()
+            return
+
         directory = os.path.dirname(self.file_path)
         base_name = os.path.basename(self.file_path)
         output_name = "c_" + os.path.splitext(base_name)[0] + "." + self.target_format
         output_path = os.path.join(directory, output_name)
         self.signals.log_signal.emit(f"Converting: {self.file_path} -> {output_path}")
+
         cmd = ["ffmpeg", "-i", self.file_path, "-y"]
         if self.bitrate and self.bitrate != "N/A":
             cmd += ["-b:a", self.bitrate]
         cmd.append(output_path)
+
         self.signals.log_signal.emit("Executing command: " + " ".join(cmd))
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode == 0:
-                self.signals.log_signal.emit("Successfully converted: " + output_path)
-            else:
-                self.signals.log_signal.emit("Error converting file: " + self.file_path)
-                self.signals.log_signal.emit("stderr: " + result.stderr)
+            # Start the conversion process
+            self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Poll for process completion while checking for cancellation
+            while True:
+                if self.cancel_event.is_set():
+                    self.process.terminate()
+                    self.signals.log_signal.emit("Conversion canceled: " + self.file_path)
+                    break
+                retcode = self.process.poll()
+                if retcode is not None:
+                    # Process finished – retrieve output
+                    stdout, stderr = self.process.communicate()
+                    if retcode == 0:
+                        self.signals.log_signal.emit("Successfully converted: " + output_path)
+                    else:
+                        self.signals.log_signal.emit("Error converting file: " + self.file_path)
+                        self.signals.log_signal.emit("stderr: " + stderr)
+                    break
+                time.sleep(0.1)
         except Exception as e:
             self.signals.log_signal.emit("Exception during conversion " + self.file_path + ": " + str(e))
         self.signals.finished_signal.emit()
@@ -55,14 +80,24 @@ class MainWindow(QMainWindow):
         }
         self.selected_files = []
         self.threadpool = QThreadPool()
+        self.cancel_event = threading.Event()
+
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout()
         central_widget.setLayout(layout)
 
+        # Layout for file selection buttons
+        file_buttons_layout = QHBoxLayout()
         self.select_files_button = QPushButton("Select Files")
         self.select_files_button.clicked.connect(self.select_files)
-        layout.addWidget(self.select_files_button)
+        file_buttons_layout.addWidget(self.select_files_button)
+
+        self.clear_files_button = QPushButton("Clear Selected Files")
+        self.clear_files_button.clicked.connect(self.clear_selected_files)
+        file_buttons_layout.addWidget(self.clear_files_button)
+
+        layout.addLayout(file_buttons_layout)
 
         self.files_list = QListWidget()
         layout.addWidget(self.files_list)
@@ -95,9 +130,18 @@ class MainWindow(QMainWindow):
         cores_layout.addWidget(self.cores_spinbox)
         layout.addLayout(cores_layout)
 
+        # Layout for conversion and cancel buttons
+        action_buttons_layout = QHBoxLayout()
         self.convert_button = QPushButton("Convert")
         self.convert_button.clicked.connect(self.start_conversion)
-        layout.addWidget(self.convert_button)
+        action_buttons_layout.addWidget(self.convert_button)
+
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.clicked.connect(self.cancel_all)
+        self.cancel_button.setEnabled(False)
+        action_buttons_layout.addWidget(self.cancel_button)
+
+        layout.addLayout(action_buttons_layout)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
@@ -114,6 +158,11 @@ class MainWindow(QMainWindow):
             self.files_list.clear()
             self.files_list.addItems(self.selected_files)
 
+    def clear_selected_files(self):
+        self.selected_files = []
+        self.files_list.clear()
+        self.log_output.append("Selected files cleared.")
+
     def update_bitrate_options(self, format_text):
         self.bitrate_combo.clear()
         presets = self.presets.get(format_text, [])
@@ -128,18 +177,27 @@ class MainWindow(QMainWindow):
         if not self.selected_files:
             self.log_output.append("No files selected for conversion!")
             return
+
+        # Clear any previous cancellation flag
+        self.cancel_event.clear()
+
         target_format = self.format_combo.currentText()
         bitrate = self.bitrate_combo.currentText() if self.bitrate_combo.isEnabled() else None
         cores = self.cores_spinbox.value()
         self.threadpool.setMaxThreadCount(cores)
+
         self.convert_button.setEnabled(False)
         self.select_files_button.setEnabled(False)
+        self.clear_files_button.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+
         self.completed_tasks = 0
         total_files = len(self.selected_files)
         self.progress_bar.setMaximum(total_files)
         self.progress_bar.setValue(0)
+
         for file_path in self.selected_files:
-            worker = Worker(file_path, target_format, bitrate)
+            worker = Worker(file_path, target_format, bitrate, self.cancel_event)
             worker.signals.log_signal.connect(self.update_log)
             worker.signals.finished_signal.connect(self.worker_finished)
             self.threadpool.start(worker)
@@ -154,9 +212,19 @@ class MainWindow(QMainWindow):
         self.log_output.append(message)
 
     def conversion_finished(self):
-        self.log_output.append("Conversion completed!")
+        if self.cancel_event.is_set():
+            self.log_output.append("Conversion canceled!")
+        else:
+            self.log_output.append("Conversion completed!")
         self.convert_button.setEnabled(True)
         self.select_files_button.setEnabled(True)
+        self.clear_files_button.setEnabled(True)
+        self.cancel_button.setEnabled(False)
+
+    def cancel_all(self):
+        self.log_output.append("Canceling all operations...")
+        self.cancel_event.set()
+        self.cancel_button.setEnabled(False)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
